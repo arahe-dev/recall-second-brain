@@ -1,30 +1,32 @@
 # Health Check — recall-sketch-notes
 
-## Entry 2 — Post Polish
-- **Timestamp**: 2026-05-02 15:39
-- **Phase**: 5 (Polish complete, moving to Review)
+## Final Entry
+- **Timestamp**: 2026-05-02 15:45
+- **Phase**: Complete
 
 ## Build status
 - cargo check: PASS
 - cargo build: PASS
-- tests: none yet (no test infrastructure)
+- tests: N/A (no test infrastructure)
 
 ## Current milestone
-- phase: 5
-- completed: MVP scaffold, drawing canvas, text notes, save/load, Ctrl+S/Z/O shortcuts, load path input, dark canvas
-- next: Phase 6 — PiQwen review bundle / PROJECT_REVIEW.md
+- phase: Complete (MVP + sidebar feature)
+- completed: All 7 phases
+- next: None (session complete)
 
 ## Friction
-- eframe 0.34 has significant API differences from 0.31 (Panel instead of TopBottomPanel, App::ui instead of update, etc.)
-- Borrow checker required restructuring text note editing to avoid simultaneous mutable/immutable self access
-- `Join-Path` in PS 5.1 only accepts 2 path segments
-- No native file dialog without extra deps; used text input workaround
+- eframe 0.34 API differences: Panel vs TopBottomPanel, App::ui vs App::update, CornerRadius vs Rounding
+- Borrow checker required deferred pattern for text note editing and sidebar board switching
+- `Join-Path` PS 5.1 limitation (2 args max)
+- No native file dialog without extra dependency
+- `alloy-rs` crate download time 13s (slowest single dep)
+- Compile time: 36s initial, ~3s iterative
 
-## Risk
-- data loss risk: low (manual save only, no autosave)
-- unstable code: low (trivial app, minimal state)
-- dependency risk: low (egui well-maintained)
-- UI uncertainty: low (immediate mode, no layout complexity)
+## Risk Summary
+- data loss risk: very low (manual save, dirty indicator)
+- unstable code: low (simple immediate-mode app)
+- build risk: none (cargo check and build pass cleanly)
+- PIQwen integration: worked smoothly (project intake, wiki, skill draft, review bundle)
 
 ## Decision
-- continue to Phase 6
+- stop — session complete, all deliverables met
