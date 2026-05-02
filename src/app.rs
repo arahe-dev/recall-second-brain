@@ -22,6 +22,8 @@ pub struct RecallApp {
     drag_note_id: Option<u64>,
     drag_offset: Vec2,
     dirty: bool,
+    show_load_input: bool,
+    load_path_input: String,
 }
 
 impl Default for RecallApp {
@@ -38,6 +40,8 @@ impl Default for RecallApp {
             drag_note_id: None,
             drag_offset: Vec2::ZERO,
             dirty: false,
+            show_load_input: false,
+            load_path_input: String::new(),
         }
     }
 }
@@ -136,6 +140,16 @@ impl eframe::App for RecallApp {
             if i.consume_key(egui::Modifiers::CTRL, egui::Key::Z) {
                 self.undo_last_stroke();
             }
+            if i.consume_key(egui::Modifiers::CTRL, egui::Key::O) {
+                self.show_load_input = !self.show_load_input;
+                if self.show_load_input {
+                    self.load_path_input = self
+                        .board_path
+                        .clone()
+                        .unwrap_or_else(|| "./data/board.json".to_string());
+                    self.status = "Enter file path and press Load".to_string();
+                }
+            }
         });
 
         // ── Toolbar ──
@@ -175,11 +189,33 @@ impl eframe::App for RecallApp {
                         self.save_current();
                     }
                     if ui.button("\u{1F4C2} Load").clicked() {
-                        let path = self
-                            .board_path
-                            .clone()
-                            .unwrap_or_else(|| "./data/board.json".to_string());
-                        self.load(&path);
+                        self.show_load_input = !self.show_load_input;
+                        if self.show_load_input {
+                            self.load_path_input = self
+                                .board_path
+                                .clone()
+                                .unwrap_or_else(|| "./data/board.json".to_string());
+                            self.status = "Enter file path".to_string();
+                        }
+                    }
+                    if self.show_load_input {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.load_path_input)
+                                .desired_width(240.0)
+                                .hint_text("path/to/board.json"),
+                        );
+                        let load_clicked = resp.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if load_clicked {
+                            let path = self.load_path_input.clone();
+                            self.load(&path);
+                            self.show_load_input = false;
+                        }
+                        if ui.button("Go").clicked() {
+                            let path = self.load_path_input.clone();
+                            self.load(&path);
+                            self.show_load_input = false;
+                        }
                     }
                     if ui.button("Save As...").clicked() {
                         let ts = std::time::SystemTime::now()
