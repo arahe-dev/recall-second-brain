@@ -1,7 +1,8 @@
 use eframe::egui;
-use egui::{Color32, CornerRadius, Frame, Margin, Panel, Pos2, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Frame, Margin, Panel, Pos2, Stroke, StrokeKind, Vec2};
+use egui::epaint::EllipseShape;
 
-use crate::model::{Board, CanvasObject, DrawingStroke, TextNote};
+use crate::model::{Board, CanvasObject, DrawingStroke, Shape, ShapeType, TextNote};
 use crate::storage;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -21,6 +22,7 @@ pub struct RecallApp {
     board_path: Option<String>,
     mode: ToolMode,
     current_stroke: Option<Vec<[f32; 2]>>,
+    current_shape: Option<([f32; 2], [f32; 2], ShapeType)>,
     next_note_id: u64,
     status: String,
     editing_note: Option<u64>,
@@ -43,6 +45,7 @@ impl Default for RecallApp {
             board_path: None,
             mode: ToolMode::Cursor,
             current_stroke: None,
+            current_shape: None,
             next_note_id: 1,
             status: "Ready".to_string(),
             editing_note: None,
@@ -603,7 +606,34 @@ impl eframe::App for RecallApp {
                         }
                     }
                     ToolMode::Line | ToolMode::Arrow | ToolMode::Rect | ToolMode::Oval => {
-                        // Placeholder — shape drawing not implemented yet
+                        let st = match self.mode {
+                            ToolMode::Line => ShapeType::Line,
+                            ToolMode::Arrow => ShapeType::Arrow,
+                            ToolMode::Rect => ShapeType::Rect,
+                            ToolMode::Oval => ShapeType::Oval,
+                            _ => unreachable!(),
+                        };
+                        if response.dragged() {
+                            if let Some(pos) = response.interact_pointer_pos() {
+                                let cp = screen_to_world(pos);
+                                if self.current_shape.is_none() {
+                                    self.current_shape = Some((cp, cp, st.clone()));
+                                } else {
+                                    let start = self.current_shape.as_ref().unwrap().0;
+                                    self.current_shape = Some((start, cp, st.clone()));
+                                }
+                            }
+                        }
+                        if response.drag_stopped() {
+                            if let Some((start, end, st2)) = self.current_shape.take() {
+                                let id = self.next_note_id;
+                                self.next_note_id += 1;
+                                self.board.canvas_objects.push(
+                                    CanvasObject::Shape(Shape::new(id, st2, start[0], start[1], end[0], end[1])),
+                                );
+                                self.dirty = true;
+                            }
+                        }
                     }
                     ToolMode::Pen => {
                         if response.dragged() {
@@ -700,24 +730,49 @@ impl eframe::App for RecallApp {
                     }
                 }
 
-                // ── Draw strokes ──
+                // ── Draw strokes and shapes ──
                 for obj in &self.board.canvas_objects {
-                    if let CanvasObject::Stroke(stroke) = obj {
-                        if stroke.points.len() >= 2 {
-                            let pts: Vec<Pos2> =
-                                stroke.points.iter().map(world_to_screen).collect();
-                            painter.add(egui::Shape::line(
-                                pts,
-                                Stroke::new(
-                                    stroke.width,
-                                    Color32::from_rgb(
-                                        stroke.color[0],
-                                        stroke.color[1],
-                                        stroke.color[2],
+                    match obj {
+                        CanvasObject::Stroke(stroke) => {
+                            if stroke.points.len() >= 2 {
+                                let pts: Vec<Pos2> =
+                                    stroke.points.iter().map(world_to_screen).collect();
+                                painter.add(egui::Shape::line(
+                                    pts,
+                                    Stroke::new(
+                                        stroke.width,
+                                        Color32::from_rgb(
+                                            stroke.color[0],
+                                            stroke.color[1],
+                                            stroke.color[2],
+                                        ),
                                     ),
-                                ),
-                            ));
+                                ));
+                            }
                         }
+                        CanvasObject::Shape(shape) => {
+                            let p1 = world_to_screen(&[shape.x1, shape.y1]);
+                            let p2 = world_to_screen(&[shape.x2, shape.y2]);
+                            let color = Color32::from_rgb(shape.color[0], shape.color[1], shape.color[2]);
+                            let sw = Stroke::new(shape.stroke_width, color);
+                            match shape.shape_type {
+                                ShapeType::Line | ShapeType::Arrow => {
+                                    painter.add(egui::Shape::line_segment([p1, p2], sw));
+                                }
+                                ShapeType::Rect => {
+                                    let rect = egui::Rect::from_two_pos(p1, p2);
+                                    painter.rect_stroke(rect, CornerRadius::same(0), sw, egui::StrokeKind::Outside);
+                                }
+                                ShapeType::Oval => {
+                                    let rect = egui::Rect::from_two_pos(p1, p2);
+                                    let center = rect.center();
+                                    let radius = rect.size() * 0.5;
+                                    let es = EllipseShape { center, radius, fill: Color32::TRANSPARENT, stroke: sw, angle: 0.0 };
+                                    painter.add(egui::Shape::Ellipse(es));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
@@ -729,6 +784,30 @@ impl eframe::App for RecallApp {
                             pts,
                             Stroke::new(3.0, Color32::from_rgb(180, 200, 255)),
                         ));
+                    }
+                }
+
+                // ── Draw in-progress shape ──
+                if let Some((start, end, st)) = &self.current_shape {
+                    let p1 = world_to_screen(start);
+                    let p2 = world_to_screen(end);
+                    let col = Color32::from_rgb(180, 200, 255);
+                    let sw = Stroke::new(2.0, col);
+                    match st {
+                        ShapeType::Line | ShapeType::Arrow => {
+                            painter.add(egui::Shape::line_segment([p1, p2], sw));
+                        }
+                        ShapeType::Rect => {
+                            let rect = egui::Rect::from_two_pos(p1, p2);
+                            painter.rect_stroke(rect, CornerRadius::same(0), sw, StrokeKind::Outside);
+                        }
+                        ShapeType::Oval => {
+                            let rect = egui::Rect::from_two_pos(p1, p2);
+                            let center = rect.center();
+                            let radius = rect.size() * 0.5;
+                            let es = EllipseShape { center, radius, fill: Color32::TRANSPARENT, stroke: sw, angle: 0.0 };
+                            painter.add(egui::Shape::Ellipse(es));
+                        }
                     }
                 }
 

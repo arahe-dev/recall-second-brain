@@ -58,6 +58,29 @@ pub struct TextNote {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Shape {
+    pub id: u64,
+    pub shape_type: ShapeType,
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+    pub color: [u8; 3],
+    pub stroke_width: f32,
+}
+
+impl Shape {
+    pub fn new(id: u64, shape_type: ShapeType, x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        Self { id, shape_type, x1, y1, x2, y2, color: [180, 200, 255], stroke_width: 2.0 }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeType {
+    Line,
+    Arrow,
+    Rect,
+    Oval,
 }
 
 // ── Backward-compatible deserialization ──
