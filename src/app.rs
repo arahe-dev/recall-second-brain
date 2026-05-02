@@ -318,7 +318,6 @@ impl RecallApp {
         let mut to_remove: Vec<usize> = Vec::new();
         for (i, obj) in self.board.canvas_objects.iter().enumerate() {
             if let CanvasObject::Stroke(s) = obj {
-                // V0: delete stroke if any point is within brush radius
                 let hit = s.points.iter().any(|p| {
                     let dx = p[0] - world_pos[0];
                     let dy = p[1] - world_pos[1];
@@ -329,13 +328,11 @@ impl RecallApp {
                 }
             }
         }
-        // Remove in reverse order to preserve indices
+        if to_remove.is_empty() { return; }
         for i in to_remove.into_iter().rev() {
             self.board.canvas_objects.remove(i);
         }
-        if !self.board.canvas_objects.is_empty() {
-            self.dirty = true;
-        }
+        self.dirty = true;
     }
 }
 
@@ -376,14 +373,14 @@ impl eframe::App for RecallApp {
                     ui.separator();
 
                     let tools = [
-                        (ToolMode::Cursor, "⊞", "Cursor"),
-                        (ToolMode::Pen, "✏", "Pen"),
-                        (ToolMode::Text, "T", "Text"),
-                        (ToolMode::Eraser, "⌫", "Eraser"),
+                        (ToolMode::Cursor, "C", "Cursor (select)"),
+                        (ToolMode::Pen, "P", "Pen (draw)"),
+                        (ToolMode::Text, "T", "Text (type)"),
+                        (ToolMode::Eraser, "Er", "Eraser"),
                     ];
                     for (tool, icon, label) in &tools {
                         let sel = self.mode == *tool;
-                        let btn = egui::Button::new(egui::RichText::new(*icon).size(14.0)).fill(if sel { Color32::from_gray(40) } else { Color32::TRANSPARENT }).min_size(Vec2::new(28.0, 24.0));
+                        let btn = egui::Button::new(egui::RichText::new(*icon).size(13.0).strong()).fill(if sel { Color32::from_gray(40) } else { Color32::TRANSPARENT }).min_size(Vec2::new(32.0, 24.0));
                         let resp = ui.add(btn).on_hover_text(*label);
                         if resp.clicked() {
                             self.mode = tool.clone();
@@ -409,14 +406,14 @@ impl eframe::App for RecallApp {
                     ui.separator();
 
                     let shapes = [
-                        (ToolMode::Line, "╱", "Line"),
-                        (ToolMode::Arrow, "→", "Arrow"),
-                        (ToolMode::Rect, "▭", "Rect"),
-                        (ToolMode::Oval, "○", "Oval"),
+                        (ToolMode::Line, "Ln", "Line"),
+                        (ToolMode::Arrow, "Ar", "Arrow"),
+                        (ToolMode::Rect, "Rc", "Rectangle"),
+                        (ToolMode::Oval, "Ov", "Oval"),
                     ];
                     for (tool, icon, label) in &shapes {
                         let sel = self.mode == *tool;
-                        let btn = egui::Button::new(egui::RichText::new(*icon).size(14.0)).fill(if sel { Color32::from_gray(40) } else { Color32::TRANSPARENT }).min_size(Vec2::new(28.0, 24.0));
+                        let btn = egui::Button::new(egui::RichText::new(*icon).size(11.0)).fill(if sel { Color32::from_gray(40) } else { Color32::TRANSPARENT }).min_size(Vec2::new(32.0, 24.0));
                         if ui.add(btn).on_hover_text(*label).clicked() {
                             self.mode = tool.clone();
                             self.status = format!("{:?}", tool);
@@ -555,17 +552,17 @@ impl eframe::App for RecallApp {
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     let mode_label = match self.mode {
-                        ToolMode::Cursor => "⊞ Cursor",
-                        ToolMode::Pen => "✏ Pen",
+                        ToolMode::Cursor => "C Select",
+                        ToolMode::Pen => "P Pen",
                         ToolMode::Text => "T Text",
                         ToolMode::Eraser => match self.eraser_mode {
-                            EraserMode::Element => "⌫ Eraser(El)",
-                            EraserMode::Brush => "⌫ Eraser(Br)",
+                            EraserMode::Element => "Er El",
+                            EraserMode::Brush => "Er Br",
                         },
-                        ToolMode::Line => "╱ Line",
-                        ToolMode::Arrow => "→ Arrow",
-                        ToolMode::Rect => "▭ Rect",
-                        ToolMode::Oval => "○ Oval",
+                        ToolMode::Line => "Ln Line",
+                        ToolMode::Arrow => "Ar Arrow",
+                        ToolMode::Rect => "Rc Rect",
+                        ToolMode::Oval => "Ov Oval",
                     };
                     ui.label(mode_label);
                     ui.separator();
@@ -680,10 +677,11 @@ impl eframe::App for RecallApp {
                                 if response.dragged() {
                                     if let Some(pos) = response.interact_pointer_pos() {
                                         let wp = screen_to_world(pos);
-                                        let radius = 15.0 / zoom.max(0.1); // zoom-aware brush radius
+                                        let radius = 15.0 / zoom.max(0.1);
                                         self.brush_erase_at(wp, radius);
                                         self.status = "Brush erasing...".to_string();
                                     }
+                                    ctx.request_repaint();
                                 }
                             }
                         }
