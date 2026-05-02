@@ -12,6 +12,35 @@ fn draw_arrowhead(painter: &egui::Painter, from: Pos2, to: Pos2, stroke: Stroke)
     painter.add(egui::Shape::line_segment([to, right], stroke));
 }
 
+fn dist_point_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-12 {
+        let ex = px - ax;
+        let ey = py - ay;
+        return (ex * ex + ey * ey).sqrt();
+    }
+    let t = ((px - ax) * dx + (py - ay) * dy) / len_sq;
+    let t = t.clamp(0.0, 1.0);
+    let cx = ax + t * dx;
+    let cy = ay + t * dy;
+    let ex = px - cx;
+    let ey = py - cy;
+    (ex * ex + ey * ey).sqrt()
+}
+
+fn point_in_ellipse(px: f32, py: f32, ex: f32, ey: f32, ew: f32, eh: f32) -> bool {
+    if ew < 0.01 || eh < 0.01 { return false; }
+    let rx = ew / 2.0;
+    let ry = eh / 2.0;
+    let cx = ex + rx;
+    let cy = ey + ry;
+    let nx = (px - cx) / rx;
+    let ny = (py - cy) / ry;
+    (nx * nx + ny * ny) <= 1.0
+}
+
 use eframe::egui;
 use egui::{Color32, CornerRadius, Frame, Margin, Panel, Pos2, Stroke, StrokeKind, Vec2};
 use egui::epaint::EllipseShape;
@@ -51,6 +80,10 @@ pub struct RecallApp {
     zoom: f32,
     pan: Vec2,
     eraser_mode: EraserMode,
+    eraser_size_el: f32,
+    eraser_size_br: f32,
+    eraser_last_pos: Option<[f32; 2]>,
+    eraser_is_dragging: bool,
 }
 
 impl Default for RecallApp {
@@ -75,6 +108,10 @@ impl Default for RecallApp {
             zoom: 1.0,
             pan: Vec2::ZERO,
             eraser_mode: EraserMode::Element,
+            eraser_size_el: 12.0,
+            eraser_size_br: 20.0,
+            eraser_last_pos: None,
+            eraser_is_dragging: false,
         }
     }
 }
@@ -302,19 +339,84 @@ impl RecallApp {
         None
     }
 
-    fn delete_object(&mut self, id: u64) {
-        self.board.canvas_objects.retain(|obj| match obj {
-            CanvasObject::TextNote(n) => n.id != id,
-            CanvasObject::Stroke(s) => s.id != id,
-            CanvasObject::Shape(sh) => sh.id != id,
-        });
-        if self.selected_object_id == Some(id) {
-            self.selected_object_id = None;
+    fn hit_test_object(&self, obj: &CanvasObject, wx: f32, wy: f32, radius: f32) -> bool {
+        match obj {
+            CanvasObject::TextNote(n) => {
+                let dx = n.x - wx;
+                let dy = n.y - wy;
+                (dx * dx + dy * dy) < radius * radius
+            }
+            CanvasObject::Stroke(s) => {
+                s.points.iter().any(|p| {
+                    let dx = p[0] - wx;
+                    let dy = p[1] - wy;
+                    (dx * dx + dy * dy) < radius * radius
+                })
+            }
+            CanvasObject::Shape(sh) => {
+                let r = radius;
+                match sh.shape_type {
+                    ShapeType::Line | ShapeType::Arrow => {
+                        dist_point_segment(wx, wy, sh.x1, sh.y1, sh.x2, sh.y2) < r
+                    }
+                    ShapeType::Rect => {
+                        let xmin = sh.x1.min(sh.x2);
+                        let xmax = sh.x1.max(sh.x2);
+                        let ymin = sh.y1.min(sh.y2);
+                        let ymax = sh.y1.max(sh.y2);
+                        if wx >= xmin - r && wx <= xmax + r && wy >= ymin - r && wy <= ymax + r {
+                            let near_edge = (wx - xmin).abs() < r || (wx - xmax).abs() < r
+                                || (wy - ymin).abs() < r || (wy - ymax).abs() < r;
+                            near_edge || (wx >= xmin && wx <= xmax && wy >= ymin && wy <= ymax)
+                        } else {
+                            false
+                        }
+                    }
+                    ShapeType::Oval => {
+                        let xmin = sh.x1.min(sh.x2);
+                        let xmax = sh.x1.max(sh.x2);
+                        let ymin = sh.y1.min(sh.y2);
+                        let ymax = sh.y1.max(sh.y2);
+                        let ew = (xmax - xmin).max(0.01);
+                        let eh = (ymax - ymin).max(0.01);
+                        let inflate = r;
+                        point_in_ellipse(wx, wy, xmin - inflate, ymin - inflate, ew + 2.0 * inflate, eh + 2.0 * inflate)
+                    }
+                }
+            }
+        }
+    }
+
+    fn hit_test_index(&self, wx: f32, wy: f32, radius: f32) -> Option<usize> {
+        for (i, obj) in self.board.canvas_objects.iter().enumerate().rev() {
+            if self.hit_test_object(obj, wx, wy, radius) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn erase_elements_at(&mut self, wx: f32, wy: f32, radius: f32, delete_one: bool) {
+        let mut to_remove: Vec<usize> = Vec::new();
+        if delete_one {
+            if let Some(idx) = self.hit_test_index(wx, wy, radius) {
+                to_remove.push(idx);
+            }
+        } else {
+            for (i, obj) in self.board.canvas_objects.iter().enumerate() {
+                if self.hit_test_object(obj, wx, wy, radius) {
+                    to_remove.push(i);
+                }
+            }
+        }
+        if to_remove.is_empty() { return; }
+        for i in to_remove.into_iter().rev() {
+            self.board.canvas_objects.remove(i);
         }
         self.dirty = true;
     }
 
-    fn brush_erase_at(&mut self, world_pos: [f32; 2], radius: f32) {
+    fn erase_brush_at(&mut self, wx: f32, wy: f32, radius: f32) {
         let radius_sq = radius * radius;
         let objects = std::mem::take(&mut self.board.canvas_objects);
         let mut erased_anything = false;
@@ -322,19 +424,16 @@ impl RecallApp {
         for obj in objects {
             match obj {
                 CanvasObject::Stroke(s) => {
-                    // Mark points to keep (outside brush radius)
                     let keep: Vec<bool> = s.points.iter().map(|p| {
-                        let dx = p[0] - world_pos[0];
-                        let dy = p[1] - world_pos[1];
+                        let dx = p[0] - wx;
+                        let dy = p[1] - wy;
                         dx * dx + dy * dy >= radius_sq
                     }).collect();
 
                     if keep.iter().all(|&k| k) {
-                        // No points touched, keep whole stroke
                         self.board.canvas_objects.push(CanvasObject::Stroke(s));
                     } else {
                         erased_anything = true;
-                        // Split into contiguous kept segments
                         let mut segment: Vec<[f32; 2]> = Vec::new();
                         for (i, pt) in s.points.iter().enumerate() {
                             if keep[i] {
@@ -353,7 +452,6 @@ impl RecallApp {
                                 segment = Vec::new();
                             }
                         }
-                        // Last segment
                         if segment.len() >= 2 {
                             self.board.canvas_objects.push(
                                 CanvasObject::Stroke(DrawingStroke {
@@ -367,13 +465,48 @@ impl RecallApp {
                     }
                 }
                 other => {
-                    self.board.canvas_objects.push(other);
+                    // For shapes and text notes: delete if hit by brush
+                    let hit = self.hit_test_object(&other, wx, wy, radius);
+                    if hit {
+                        erased_anything = true;
+                        // Shape deleted entirely
+                    } else {
+                        self.board.canvas_objects.push(other);
+                    }
                 }
             }
         }
 
         if erased_anything {
             self.dirty = true;
+        }
+    }
+
+    fn interpolate_erase(&mut self, wx: f32, wy: f32, radius: f32, brush_mode: bool) {
+        if let Some(last) = self.eraser_last_pos {
+            let dx = wx - last[0];
+            let dy = wy - last[1];
+            let dist = (dx * dx + dy * dy).sqrt();
+            let step = (radius * 0.5).max(1.0);
+            if dist > step {
+                let steps = (dist / step).min(32.0) as u32;
+                for s in 1..=steps {
+                    let t = s as f32 / steps as f32;
+                    let ix = last[0] + dx * t;
+                    let iy = last[1] + dy * t;
+                    if brush_mode {
+                        self.erase_brush_at(ix, iy, radius);
+                    } else {
+                        self.erase_elements_at(ix, iy, radius, false);
+                    }
+                }
+                return;
+            }
+        }
+        if brush_mode {
+            self.erase_brush_at(wx, wy, radius);
+        } else {
+            self.erase_elements_at(wx, wy, radius, false);
         }
     }
 }
@@ -442,6 +575,21 @@ impl eframe::App for RecallApp {
                                 EraserMode::Brush => "Br",
                             };
                             ui.label(egui::RichText::new(mode_label).color(Color32::from_gray(160)).size(9.0));
+                        }
+                        // Eraser size slider when eraser is active
+                        if self.mode == ToolMode::Eraser && *tool == ToolMode::Eraser {
+                            ui.separator();
+                            let size_label = match self.eraser_mode {
+                                EraserMode::Element => "El sz",
+                                EraserMode::Brush => "Br sz",
+                            };
+                            ui.label(egui::RichText::new(size_label).color(Color32::from_gray(140)).size(9.0));
+                            let (min_sz, max_sz, cur) = match self.eraser_mode {
+                                EraserMode::Element => (1.0, 64.0, &mut self.eraser_size_el),
+                                EraserMode::Brush => (2.0, 128.0, &mut self.eraser_size_br),
+                            };
+                            ui.add(egui::Slider::new(cur, min_sz..=max_sz).show_value(false));
+                            ui.label(egui::RichText::new(format!("{:.0}", *cur)).color(Color32::from_gray(160)).size(9.0));
                         }
                     }
 
@@ -593,20 +741,20 @@ impl eframe::App for RecallApp {
             })
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let mode_label = match self.mode {
-                        ToolMode::Cursor => "C Select",
-                        ToolMode::Pen => "P Pen",
-                        ToolMode::Text => "T Text",
+                    let mode_label: String = match self.mode {
+                        ToolMode::Cursor => "C Select".into(),
+                        ToolMode::Pen => "P Pen".into(),
+                        ToolMode::Text => "T Text".into(),
                         ToolMode::Eraser => match self.eraser_mode {
-                            EraserMode::Element => "Er El",
-                            EraserMode::Brush => "Er Br",
+                            EraserMode::Element => format!("Er El sz{:.0}", self.eraser_size_el),
+                            EraserMode::Brush => format!("Er Br sz{:.0}", self.eraser_size_br),
                         },
-                        ToolMode::Line => "Ln Line",
-                        ToolMode::Arrow => "Ar Arrow",
-                        ToolMode::Rect => "Rc Rect",
-                        ToolMode::Oval => "Ov Oval",
+                        ToolMode::Line => "Ln Line".into(),
+                        ToolMode::Arrow => "Ar Arrow".into(),
+                        ToolMode::Rect => "Rc Rect".into(),
+                        ToolMode::Oval => "Ov Oval".into(),
                     };
-                    ui.label(mode_label);
+                    ui.label(&mode_label);
                     ui.separator();
                     let sel_str = match self.selected_object_id {
                         Some(id) => format!(" | Sel:{}", id),
@@ -704,32 +852,69 @@ impl eframe::App for RecallApp {
                         }
                     }
                     ToolMode::Eraser => {
+                        let pointer_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                        let hover = ctx.input(|i| i.pointer.hover_pos());
+
                         match self.eraser_mode {
                             EraserMode::Element => {
-                                // Element eraser: click deletes whole object
+                                let radius = self.eraser_size_el / zoom.max(0.1);
                                 if response.clicked() {
                                     if let Some(pos) = response.interact_pointer_pos() {
-                                        if let Some(id) = self.find_object_at(canvas_rect, pos, 30.0) {
-                                            self.delete_object(id);
+                                        let wp = screen_to_world(pos);
+                                        if self.hit_test_index(wp[0], wp[1], radius).is_some() {
+                                            self.erase_elements_at(wp[0], wp[1], radius, true);
                                             self.status = "Deleted element".to_string();
                                         }
                                     }
+                                    self.eraser_is_dragging = false;
+                                    self.eraser_last_pos = None;
+                                }
+                                if pointer_down && hover.is_some() && canvas_rect.contains(hover.unwrap()) {
+                                    if !self.eraser_is_dragging {
+                                        self.eraser_is_dragging = true;
+                                        if let Some(pos) = hover {
+                                            let wp = screen_to_world(pos);
+                                            self.eraser_last_pos = Some(wp);
+                                        }
+                                    }
+                                    if self.eraser_is_dragging {
+                                        if let Some(pos) = hover {
+                                            let wp = screen_to_world(pos);
+                                            self.interpolate_erase(wp[0], wp[1], radius, false);
+                                            self.eraser_last_pos = Some(wp);
+                                            self.status = "Erasing elements...".to_string();
+                                        }
+                                        ctx.request_repaint();
+                                    }
+                                }
+                                if !pointer_down && self.eraser_is_dragging {
+                                    self.eraser_is_dragging = false;
+                                    self.eraser_last_pos = None;
                                 }
                             }
                             EraserMode::Brush => {
-                                // Brush eraser: drag removes stroke points under cursor
-                                let pointer_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-                                if pointer_down {
-                                    if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
-                                        let in_canvas = canvas_rect.contains(pos);
-                                        if in_canvas {
+                                let radius = self.eraser_size_br / zoom.max(0.1);
+                                if pointer_down && hover.is_some() && canvas_rect.contains(hover.unwrap()) {
+                                    if !self.eraser_is_dragging {
+                                        self.eraser_is_dragging = true;
+                                        if let Some(pos) = hover {
                                             let wp = screen_to_world(pos);
-                                            let radius = 20.0 / zoom.max(0.1);
-                                            self.brush_erase_at(wp, radius);
-                                            self.status = "Brush erasing...".to_string();
+                                            self.eraser_last_pos = Some(wp);
                                         }
                                     }
-                                    ctx.request_repaint();
+                                    if self.eraser_is_dragging {
+                                        if let Some(pos) = hover {
+                                            let wp = screen_to_world(pos);
+                                            self.interpolate_erase(wp[0], wp[1], radius, true);
+                                            self.eraser_last_pos = Some(wp);
+                                            self.status = "Brush erasing...".to_string();
+                                        }
+                                        ctx.request_repaint();
+                                    }
+                                }
+                                if !pointer_down && self.eraser_is_dragging {
+                                    self.eraser_is_dragging = false;
+                                    self.eraser_last_pos = None;
                                 }
                             }
                         }
