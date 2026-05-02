@@ -664,6 +664,7 @@ impl eframe::App for RecallApp {
                     ToolMode::Eraser => {
                         match self.eraser_mode {
                             EraserMode::Element => {
+                                // Element eraser: click deletes whole object
                                 if response.clicked() {
                                     if let Some(pos) = response.interact_pointer_pos() {
                                         if let Some(id) = self.find_object_at(canvas_rect, pos, 30.0) {
@@ -674,8 +675,11 @@ impl eframe::App for RecallApp {
                                 }
                             }
                             EraserMode::Brush => {
-                                if response.dragged() {
-                                    if let Some(pos) = response.interact_pointer_pos() {
+                                // Brush eraser: drag removes strokes under cursor
+                                let pointer_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                                let canvas_hover = canvas_rect.contains(ctx.input(|i| i.pointer.hover_pos().unwrap_or(Pos2::new(-1.0, -1.0))));
+                                if pointer_down && canvas_hover {
+                                    if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                                         let wp = screen_to_world(pos);
                                         let radius = 15.0 / zoom.max(0.1);
                                         self.brush_erase_at(wp, radius);
