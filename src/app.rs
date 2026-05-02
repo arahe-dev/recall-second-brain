@@ -24,6 +24,7 @@ pub struct RecallApp {
     dirty: bool,
     show_load_input: bool,
     load_path_input: String,
+    board_list: Vec<String>,
 }
 
 impl Default for RecallApp {
@@ -42,6 +43,7 @@ impl Default for RecallApp {
             dirty: false,
             show_load_input: false,
             load_path_input: String::new(),
+            board_list: Vec::new(),
         }
     }
 }
@@ -90,6 +92,7 @@ impl RecallApp {
                 self.status = format!("Save failed: {e}");
             }
         }
+        self.scan_board_files();
     }
 
     fn load(&mut self, path: &str) {
@@ -112,12 +115,50 @@ impl RecallApp {
                 self.status = format!("Load failed: {e}");
             }
         }
+        self.scan_board_files();
     }
 
     fn undo_last_stroke(&mut self) {
         self.board.strokes.pop();
         self.dirty = true;
         self.status = "Undo last stroke".to_string();
+    }
+
+    fn scan_board_files(&mut self) {
+        let data_dir = "./data";
+        self.board_list.clear();
+        if let Ok(entries) = std::fs::read_dir(data_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    if let Some(s) = path.to_str() {
+                        self.board_list.push(s.to_string());
+                    }
+                }
+            }
+        }
+        self.board_list.sort();
+    }
+
+    fn new_board(&mut self) {
+        if self.dirty {
+            self.save_current();
+        }
+        self.board = Board::new("Untitled Board");
+        self.board_path = None;
+        self.next_note_id = 1;
+        self.current_stroke = None;
+        self.editing_note = None;
+        self.dirty = false;
+        self.status = "New board".to_string();
+        self.scan_board_files();
+    }
+
+    fn switch_board(&mut self, path: &str) {
+        if self.dirty {
+            self.save_current();
+        }
+        self.load(path);
     }
 
     fn clear_all(&mut self) {
@@ -230,6 +271,74 @@ impl eframe::App for RecallApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(&self.status);
                     });
+                });
+            });
+
+        // ── Sidebar (board list) ──
+        self.scan_board_files();
+        Panel::left("sidebar")
+            .frame(Frame {
+                fill: Color32::from_gray(22),
+                inner_margin: Margin::symmetric(4, 4),
+                ..Default::default()
+            })
+            .resizable(false)
+            .default_size(160.0)
+            .show_inside(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new("Boards")
+                            .color(Color32::from_gray(140))
+                            .size(11.0),
+                    );
+                    ui.separator();
+                    if ui.button("+ New Board").clicked() {
+                        self.new_board();
+                    }
+                    ui.separator();
+                    let current_basename = self
+                        .board_path
+                        .as_ref()
+                        .map(|p| {
+                            std::path::Path::new(p)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("untitled")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| "untitled".to_string());
+                    ui.label(
+                        egui::RichText::new(&current_basename)
+                            .color(Color32::from_rgb(88, 166, 255))
+                            .size(12.0),
+                    );
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .max_height(ui.available_height() - 40.0)
+                        .show(ui, |ui| {
+                            let mut clicked: Option<String> = None;
+                            for path in &self.board_list {
+                                let basename = std::path::Path::new(path)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or(path);
+                                let is_current = self
+                                    .board_path
+                                    .as_ref()
+                                    .map(|p| p == path)
+                                    .unwrap_or(false);
+                                if ui
+                                    .selectable_label(is_current, basename)
+                                    .clicked()
+                                    && !is_current
+                                {
+                                    clicked = Some(path.clone());
+                                }
+                            }
+                            if let Some(p) = clicked {
+                                self.switch_board(&p);
+                            }
+                        });
                 });
             });
 
