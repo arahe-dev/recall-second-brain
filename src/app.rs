@@ -1,7 +1,7 @@
 use eframe::egui;
 use egui::{Color32, CornerRadius, Frame, Margin, Panel, Pos2, Stroke, Vec2};
 
-use crate::model::{Board, DrawingStroke, TextNote};
+use crate::model::{Board, CanvasObject, DrawingStroke, TextNote};
 use crate::storage;
 
 #[derive(PartialEq)]
@@ -56,8 +56,17 @@ impl RecallApp {
                 Ok(board) => {
                     app.board = board;
                     app.board_path = Some(path.clone());
-                    app.next_note_id =
-                        app.board.text_notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+                    app.next_note_id = app
+                        .board
+                        .canvas_objects
+                        .iter()
+                        .filter_map(|obj| match obj {
+                            CanvasObject::TextNote(n) => Some(n.id),
+                            _ => None,
+                        })
+                        .max()
+                        .unwrap_or(0)
+                        + 1;
                     app.status = format!("Loaded: {path}");
                 }
                 Err(e) => {
@@ -96,9 +105,12 @@ impl RecallApp {
                 self.board_path = Some(path.to_string());
                 self.next_note_id = self
                     .board
-                    .text_notes
+                    .canvas_objects
                     .iter()
-                    .map(|n| n.id)
+                    .filter_map(|obj| match obj {
+                        CanvasObject::TextNote(n) => Some(n.id),
+                        _ => None,
+                    })
                     .max()
                     .unwrap_or(0)
                     + 1;
@@ -113,9 +125,19 @@ impl RecallApp {
     }
 
     fn undo_last_stroke(&mut self) {
-        self.board.strokes.pop();
-        self.dirty = true;
-        self.status = "Undo last stroke".to_string();
+        // Remove the last Stroke variant from canvas_objects
+        let mut remove_idx = None;
+        for (i, obj) in self.board.canvas_objects.iter().enumerate().rev() {
+            if matches!(obj, CanvasObject::Stroke(_)) {
+                remove_idx = Some(i);
+                break;
+            }
+        }
+        if let Some(idx) = remove_idx {
+            self.board.canvas_objects.remove(idx);
+            self.dirty = true;
+            self.status = "Undo last stroke".to_string();
+        }
     }
 
     fn scan_board_files(&mut self) {
@@ -156,10 +178,63 @@ impl RecallApp {
     }
 
     fn clear_all(&mut self) {
-        self.board.strokes.clear();
-        self.board.text_notes.clear();
+        self.board.canvas_objects.clear();
         self.dirty = true;
         self.status = "Canvas cleared".to_string();
+    }
+
+    fn count_strokes(&self) -> usize {
+        self.board
+            .canvas_objects
+            .iter()
+            .filter(|obj| matches!(obj, CanvasObject::Stroke(_)))
+            .count()
+    }
+
+    fn count_notes(&self) -> usize {
+        self.board
+            .canvas_objects
+            .iter()
+            .filter(|obj| matches!(obj, CanvasObject::TextNote(_)))
+            .count()
+    }
+
+    fn find_note(&self, id: u64) -> Option<TextNote> {
+        for obj in &self.board.canvas_objects {
+            if let CanvasObject::TextNote(n) = obj {
+                if n.id == id {
+                    return Some(n.clone());
+                }
+            }
+        }
+        None
+    }
+
+    fn find_note_mut(&mut self, id: u64) -> Option<&mut TextNote> {
+        for obj in &mut self.board.canvas_objects {
+            if let CanvasObject::TextNote(n) = obj {
+                if n.id == id {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+
+    fn find_note_at(&self, canvas_rect: egui::Rect, pos: Pos2, threshold: f32) -> Option<u64> {
+        for obj in &self.board.canvas_objects {
+            if let CanvasObject::TextNote(n) = obj {
+                let np = Pos2::new(canvas_rect.min.x + n.x, canvas_rect.min.y + n.y);
+                if pos.distance(np) < threshold {
+                    return Some(n.id);
+                }
+            }
+        }
+        None
+    }
+
+    fn find_draggable_note(&self, canvas_rect: egui::Rect, pos: Pos2, threshold: f32) -> Option<u64> {
+        self.find_note_at(canvas_rect, pos, threshold)
     }
 }
 
@@ -351,8 +426,8 @@ impl eframe::App for RecallApp {
                     ui.separator();
                     ui.label(format!(
                         "Strokes: {}  Notes: {}",
-                        self.board.strokes.len(),
-                        self.board.text_notes.len()
+                        self.count_strokes(),
+                        self.count_notes()
                     ));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.dirty {
@@ -401,11 +476,12 @@ impl eframe::App for RecallApp {
                         if response.drag_stopped() {
                             if let Some(points) = self.current_stroke.take() {
                                 if points.len() >= 2 {
-                                    self.board.strokes.push(DrawingStroke {
-                                        points,
-                                        color: [180, 200, 255],
-                                        width: 3.0,
-                                    });
+                                    let mut stroke =
+                                        DrawingStroke::new([180, 200, 255], 3.0);
+                                    stroke.points = points;
+                                    self.board
+                                        .canvas_objects
+                                        .push(CanvasObject::Stroke(stroke));
                                     self.dirty = true;
                                 }
                             }
@@ -415,25 +491,12 @@ impl eframe::App for RecallApp {
                         if response.clicked() {
                             if let Some(pos) = response.interact_pointer_pos() {
                                 let cp = to_canvas(pos);
-                                let clicked_id = self
-                                    .board
-                                    .text_notes
-                                    .iter()
-                                    .find(|n| {
-                                        let np = Pos2::new(
-                                            canvas_rect.min.x + n.x,
-                                            canvas_rect.min.y + n.y,
-                                        );
-                                        pos.distance(np) < 30.0
-                                    })
-                                    .map(|n| n.id);
+                                let clicked_id =
+                                    self.find_note_at(canvas_rect, pos, 30.0);
 
                                 if let Some(nid) = clicked_id {
                                     let text = self
-                                        .board
-                                        .text_notes
-                                        .iter()
-                                        .find(|n| n.id == nid)
+                                        .find_note(nid)
                                         .map(|n| n.text.clone())
                                         .unwrap_or_default();
                                     self.editing_note = Some(nid);
@@ -442,12 +505,14 @@ impl eframe::App for RecallApp {
                                 } else {
                                     let id = self.next_note_id;
                                     self.next_note_id += 1;
-                                    self.board.text_notes.push(TextNote {
-                                        id,
-                                        x: cp[0] - 50.0,
-                                        y: cp[1] - 10.0,
-                                        text: "New note".to_string(),
-                                    });
+                                    self.board.canvas_objects.push(
+                                        CanvasObject::TextNote(TextNote {
+                                            id,
+                                            x: cp[0] - 50.0,
+                                            y: cp[1] - 10.0,
+                                            text: "New note".to_string(),
+                                        }),
+                                    );
                                     self.editing_note = Some(id);
                                     self.edit_buffer = String::new();
                                     self.dirty = true;
@@ -458,27 +523,27 @@ impl eframe::App for RecallApp {
 
                         if response.dragged() && self.drag_note_id.is_none() {
                             if let Some(pos) = response.interact_pointer_pos() {
-                                for note in &self.board.text_notes {
+                                if let Some(note_id) =
+                                    self.find_draggable_note(canvas_rect, pos, 30.0)
+                                {
+                                    self.drag_note_id = Some(note_id);
+                                    let note = self.find_note(note_id).unwrap();
                                     let np = Pos2::new(
                                         canvas_rect.min.x + note.x,
                                         canvas_rect.min.y + note.y,
                                     );
-                                    if pos.distance(np) < 30.0 {
-                                        self.drag_note_id = Some(note.id);
-                                        self.drag_offset = pos - np;
-                                        break;
-                                    }
+                                    self.drag_offset = pos - np;
                                 }
                             }
                         }
                         if let Some(drag_id) = self.drag_note_id {
                             if response.dragged() {
                                 if let Some(pos) = response.interact_pointer_pos() {
-                                    if let Some(note) =
-                                        self.board.text_notes.iter_mut().find(|n| n.id == drag_id)
-                                    {
-                                        note.x = pos.x - canvas_rect.min.x - self.drag_offset.x;
-                                        note.y = pos.y - canvas_rect.min.y - self.drag_offset.y;
+                                    let dx = self.drag_offset.x;
+                                    let dy = self.drag_offset.y;
+                                    if let Some(note) = self.find_note_mut(drag_id) {
+                                        note.x = pos.x - canvas_rect.min.x - dx;
+                                        note.y = pos.y - canvas_rect.min.y - dy;
                                         self.dirty = true;
                                     }
                                 }
@@ -491,20 +556,23 @@ impl eframe::App for RecallApp {
                 }
 
                 // ── Draw strokes ──
-                for stroke in &self.board.strokes {
-                    if stroke.points.len() >= 2 {
-                        let pts: Vec<Pos2> = stroke.points.iter().map(from_canvas).collect();
-                        painter.add(egui::Shape::line(
-                            pts,
-                            Stroke::new(
-                                stroke.width,
-                                Color32::from_rgb(
-                                    stroke.color[0],
-                                    stroke.color[1],
-                                    stroke.color[2],
+                for obj in &self.board.canvas_objects {
+                    if let CanvasObject::Stroke(stroke) = obj {
+                        if stroke.points.len() >= 2 {
+                            let pts: Vec<Pos2> =
+                                stroke.points.iter().map(from_canvas).collect();
+                            painter.add(egui::Shape::line(
+                                pts,
+                                Stroke::new(
+                                    stroke.width,
+                                    Color32::from_rgb(
+                                        stroke.color[0],
+                                        stroke.color[1],
+                                        stroke.color[2],
+                                    ),
                                 ),
-                            ),
-                        ));
+                            ));
+                        }
                     }
                 }
 
@@ -524,62 +592,65 @@ impl eframe::App for RecallApp {
                 let mut edit_buffer = std::mem::take(&mut self.edit_buffer);
                 let mut edit_result: Option<(u64, String)> = None;
 
-                for note in &self.board.text_notes {
-                    let pos = from_canvas(&[note.x, note.y]);
-                    let is_editing = editing_note == Some(note.id);
+                for obj in &self.board.canvas_objects {
+                    if let CanvasObject::TextNote(note) = obj {
+                        let pos = from_canvas(&[note.x, note.y]);
+                        let is_editing = editing_note == Some(note.id);
 
-                    let note_rect = egui::Rect::from_min_size(pos, egui::vec2(200.0, 32.0));
-                    painter.rect_filled(
-                        note_rect,
-                        CornerRadius::same(4),
-                        Color32::from_black_alpha(160),
-                    );
-
-                    if is_editing {
-                        let area_id = egui::Id::new("note_edit");
-                        let mut edit_done = false;
-                        let mut edit_cancelled = false;
-
-                        egui::Area::new(area_id)
-                            .fixed_pos(pos + Vec2::new(4.0, 4.0))
-                            .show(&ctx, |ui| {
-                                ui.set_max_width(190.0);
-                                let resp = ui.add(
-                                    egui::TextEdit::singleline(&mut edit_buffer)
-                                        .desired_width(190.0)
-                                        .text_color(Color32::WHITE),
-                                );
-                                if resp.lost_focus()
-                                    || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                {
-                                    edit_done = true;
-                                }
-                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                    edit_cancelled = true;
-                                }
-                            });
-
-                        if edit_cancelled {
-                            self.editing_note = None;
-                        } else if edit_done {
-                            edit_result = Some((note.id, edit_buffer.clone()));
-                            self.editing_note = None;
-                            self.dirty = true;
-                        }
-                    } else {
-                        painter.text(
-                            pos + Vec2::new(6.0, 6.0),
-                            egui::Align2::LEFT_TOP,
-                            &note.text,
-                            egui::TextStyle::Body.resolve(&ctx.global_style()),
-                            Color32::WHITE,
+                        let note_rect =
+                            egui::Rect::from_min_size(pos, egui::vec2(200.0, 32.0));
+                        painter.rect_filled(
+                            note_rect,
+                            CornerRadius::same(4),
+                            Color32::from_black_alpha(160),
                         );
+
+                        if is_editing {
+                            let area_id = egui::Id::new("note_edit");
+                            let mut edit_done = false;
+                            let mut edit_cancelled = false;
+
+                            egui::Area::new(area_id)
+                                .fixed_pos(pos + Vec2::new(4.0, 4.0))
+                                .show(&ctx, |ui| {
+                                    ui.set_max_width(190.0);
+                                    let resp = ui.add(
+                                        egui::TextEdit::singleline(&mut edit_buffer)
+                                            .desired_width(190.0)
+                                            .text_color(Color32::WHITE),
+                                    );
+                                    if resp.lost_focus()
+                                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    {
+                                        edit_done = true;
+                                    }
+                                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                        edit_cancelled = true;
+                                    }
+                                });
+
+                            if edit_cancelled {
+                                self.editing_note = None;
+                            } else if edit_done {
+                                edit_result = Some((note.id, edit_buffer.clone()));
+                                self.editing_note = None;
+                                self.dirty = true;
+                            }
+                        } else {
+                            painter.text(
+                                pos + Vec2::new(6.0, 6.0),
+                                egui::Align2::LEFT_TOP,
+                                &note.text,
+                                egui::TextStyle::Body.resolve(&ctx.global_style()),
+                                Color32::WHITE,
+                            );
+                        }
                     }
                 }
 
                 self.edit_buffer = edit_buffer;
                 if let Some((nid, text)) = edit_result {
-                    if let Some(note) = self.board.text_notes.iter_mut().find(|n| n.id == nid) {
+                    if let Some(note) = self.find_note_mut(nid) {
                         note.text = text;
                     }
                 }

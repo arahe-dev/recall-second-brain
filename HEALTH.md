@@ -1,32 +1,37 @@
 # Health Check — recall-sketch-notes
 
-## Final Entry
-- **Timestamp**: 2026-05-02 15:45
-- **Phase**: Complete
+## Entry 1 — Preflight (Session 2)
+- **Timestamp**: 2026-05-02
+- **Phase**: 0 (Preflight)
+- **Builder**: PiQwen/Qwen (planned), DeepSeek (supervisor)
 
 ## Build status
 - cargo check: PASS
-- cargo build: PASS
-- tests: N/A (no test infrastructure)
+- cargo build: PASS (after killing stale PID 31692)
+- tests: N/A
 
-## Current milestone
-- phase: Complete (MVP + sidebar feature)
-- completed: All 7 phases
-- next: None (session complete)
+## Server status
+- Qwen server: starting (background job, 20.6 GB model loading)
+- Endpoint: http://127.0.0.1:8080
+- Thinking: disabled (agent mode)
+- Overheating risk: moderate (15W TDP, model uses CPU-MoE + GPU offload)
 
 ## Friction
-- eframe 0.34 API differences: Panel vs TopBottomPanel, App::ui vs App::update, CornerRadius vs Rounding
-- Borrow checker required deferred pattern for text note editing and sidebar board switching
-- `Join-Path` PS 5.1 limitation (2 args max)
-- No native file dialog without extra dependency
-- `alloy-rs` crate download time 13s (slowest single dep)
-- Compile time: 36s initial, ~3s iterative
+- `pi tps` syntax changed (no -PromptSize/-MaxTokens flags)
+- Server must run as background job to survive CLI timeout
+- 20.6 GB model takes significant time to load
+- Previous `pi -p` usage pattern unknown; may need --provider --model flags
 
-## Risk Summary
-- data loss risk: very low (manual save, dirty indicator)
-- unstable code: low (simple immediate-mode app)
-- build risk: none (cargo check and build pass cleanly)
-- PIQwen integration: worked smoothly (project intake, wiki, skill draft, review bundle)
+## Current milestone
+- phase: 0 (Preflight)
+- completed: All inspections done, tools verified, server starting
+- next: Phase 1 / Slice 1 (Core model refactor) — first PiQwen prompt
+
+## Risk
+- data loss risk: low (backup exists at recall-sketch-notes-mvp-20260502-153925.zip)
+- server crash risk: moderate (model uses ~6.6 GB VRAM on 8 GB GPU)
+- Qwen hallucination risk: low for bounded code changes with cargo check gate
+- DeepSeek overreach risk: need to resist direct code edits, only supervise
 
 ## Decision
-- stop — session complete, all deliverables met
+- continue — wait for server, then start Phase 1
