@@ -416,6 +416,38 @@ impl RecallApp {
         self.dirty = true;
     }
 
+    fn shape_to_outline_points(&self, sh: &Shape) -> Vec<[f32; 2]> {
+        match sh.shape_type {
+            ShapeType::Line | ShapeType::Arrow => {
+                vec![[sh.x1, sh.y1], [sh.x2, sh.y2]]
+            }
+            ShapeType::Rect => {
+                let xmin = sh.x1.min(sh.x2);
+                let xmax = sh.x1.max(sh.x2);
+                let ymin = sh.y1.min(sh.y2);
+                let ymax = sh.y1.max(sh.y2);
+                vec![[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]
+            }
+            ShapeType::Oval => {
+                let xmin = sh.x1.min(sh.x2);
+                let xmax = sh.x1.max(sh.x2);
+                let ymin = sh.y1.min(sh.y2);
+                let ymax = sh.y1.max(sh.y2);
+                let cx = (xmin + xmax) / 2.0;
+                let cy = (ymin + ymax) / 2.0;
+                let rx = (xmax - xmin) / 2.0;
+                let ry = (ymax - ymin) / 2.0;
+                let n = 20;
+                let mut pts = Vec::with_capacity(n + 1);
+                for i in 0..=n {
+                    let ang = std::f32::consts::TAU * i as f32 / n as f32;
+                    pts.push([cx + rx * ang.cos(), cy + ry * ang.sin()]);
+                }
+                pts
+            }
+        }
+    }
+
     fn erase_brush_at(&mut self, wx: f32, wy: f32, radius: f32) {
         let radius_sq = radius * radius;
         let objects = std::mem::take(&mut self.board.canvas_objects);
@@ -442,10 +474,8 @@ impl RecallApp {
                                 if segment.len() >= 2 {
                                     self.board.canvas_objects.push(
                                         CanvasObject::Stroke(DrawingStroke {
-                                            id: s.id,
-                                            points: segment,
-                                            color: s.color,
-                                            width: s.width,
+                                            id: s.id, points: segment,
+                                            color: s.color, width: s.width,
                                         }),
                                     );
                                 }
@@ -455,24 +485,56 @@ impl RecallApp {
                         if segment.len() >= 2 {
                             self.board.canvas_objects.push(
                                 CanvasObject::Stroke(DrawingStroke {
-                                    id: s.id,
-                                    points: segment,
-                                    color: s.color,
-                                    width: s.width,
+                                    id: s.id, points: segment,
+                                    color: s.color, width: s.width,
                                 }),
                             );
                         }
                     }
                 }
-                other => {
-                    // For shapes and text notes: delete if hit by brush
-                    let hit = self.hit_test_object(&other, wx, wy, radius);
-                    if hit {
-                        erased_anything = true;
-                        // Shape deleted entirely
+                CanvasObject::Shape(sh) => {
+                    // Partial erasure: convert shape outline to polyline, erase points, keep fragments
+                    let outline = self.shape_to_outline_points(&sh);
+                    let keep: Vec<bool> = outline.iter().map(|p| {
+                        let dx = p[0] - wx;
+                        let dy = p[1] - wy;
+                        dx * dx + dy * dy >= radius_sq
+                    }).collect();
+
+                    if keep.iter().all(|&k| k) {
+                        // No points touched, keep shape
+                        self.board.canvas_objects.push(CanvasObject::Shape(sh));
                     } else {
-                        self.board.canvas_objects.push(other);
+                        erased_anything = true;
+                        let mut segment: Vec<[f32; 2]> = Vec::new();
+                        for (i, pt) in outline.iter().enumerate() {
+                            if keep[i] {
+                                segment.push(*pt);
+                            } else {
+                                if segment.len() >= 2 {
+                                    self.board.canvas_objects.push(
+                                        CanvasObject::Stroke(DrawingStroke {
+                                            id: sh.id, points: segment,
+                                            color: sh.color, width: sh.stroke_width.max(1.0),
+                                        }),
+                                    );
+                                }
+                                segment = Vec::new();
+                            }
+                        }
+                        if segment.len() >= 2 {
+                            self.board.canvas_objects.push(
+                                CanvasObject::Stroke(DrawingStroke {
+                                    id: sh.id, points: segment,
+                                    color: sh.color, width: sh.stroke_width.max(1.0),
+                                }),
+                            );
+                        }
                     }
+                }
+                CanvasObject::TextNote(_) => {
+                    // Brush eraser does NOT erase text notes
+                    self.board.canvas_objects.push(obj);
                 }
             }
         }
@@ -563,33 +625,28 @@ impl eframe::App for RecallApp {
                             self.current_stroke = None;
                             self.status = format!("{:?} mode", tool);
                         }
-                        // Eraser right-click context menu
-                        if *tool == ToolMode::Eraser {
-                            if resp.secondary_clicked() {
-                                self.eraser_mode = if self.eraser_mode == EraserMode::Element { EraserMode::Brush } else { EraserMode::Element };
-                                self.status = format!("Eraser: {:?}", self.eraser_mode);
-                            }
-                            // Show current eraser mode indicator
-                            let mode_label = match self.eraser_mode {
-                                EraserMode::Element => "El",
-                                EraserMode::Brush => "Br",
-                            };
-                            ui.label(egui::RichText::new(mode_label).color(Color32::from_gray(160)).size(9.0));
-                        }
-                        // Eraser size slider when eraser is active
+                        // Eraser settings panel (visible when eraser is active)
                         if self.mode == ToolMode::Eraser && *tool == ToolMode::Eraser {
                             ui.separator();
-                            let size_label = match self.eraser_mode {
-                                EraserMode::Element => "El sz",
-                                EraserMode::Brush => "Br sz",
+                            // Mode toggle
+                            let el_sel = self.eraser_mode == EraserMode::Element;
+                            let br_sel = self.eraser_mode == EraserMode::Brush;
+                            if ui.selectable_label(el_sel, "Element").clicked() {
+                                self.eraser_mode = EraserMode::Element;
+                                self.status = "Element eraser".to_string();
+                            }
+                            if ui.selectable_label(br_sel, "Brush").clicked() {
+                                self.eraser_mode = EraserMode::Brush;
+                                self.status = "Brush eraser".to_string();
+                            }
+                            // Size slider
+                            let (min_sz, max_sz, cur, label) = match self.eraser_mode {
+                                EraserMode::Element => (1.0, 64.0, &mut self.eraser_size_el, "Size"),
+                                EraserMode::Brush => (2.0, 128.0, &mut self.eraser_size_br, "Size"),
                             };
-                            ui.label(egui::RichText::new(size_label).color(Color32::from_gray(140)).size(9.0));
-                            let (min_sz, max_sz, cur) = match self.eraser_mode {
-                                EraserMode::Element => (1.0, 64.0, &mut self.eraser_size_el),
-                                EraserMode::Brush => (2.0, 128.0, &mut self.eraser_size_br),
-                            };
-                            ui.add(egui::Slider::new(cur, min_sz..=max_sz).show_value(false));
-                            ui.label(egui::RichText::new(format!("{:.0}", *cur)).color(Color32::from_gray(160)).size(9.0));
+                            ui.label(egui::RichText::new(label).color(Color32::from_gray(140)).size(10.0));
+                            ui.add(egui::Slider::new(cur, min_sz..=max_sz));
+                            ui.label(egui::RichText::new(format!("{:.0}", *cur)).color(Color32::from_gray(160)).size(10.0));
                         }
                     }
 
