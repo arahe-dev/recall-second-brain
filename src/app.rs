@@ -315,24 +315,66 @@ impl RecallApp {
     }
 
     fn brush_erase_at(&mut self, world_pos: [f32; 2], radius: f32) {
-        let mut to_remove: Vec<usize> = Vec::new();
-        for (i, obj) in self.board.canvas_objects.iter().enumerate() {
-            if let CanvasObject::Stroke(s) = obj {
-                let hit = s.points.iter().any(|p| {
-                    let dx = p[0] - world_pos[0];
-                    let dy = p[1] - world_pos[1];
-                    (dx * dx + dy * dy) < radius * radius
-                });
-                if hit {
-                    to_remove.push(i);
+        let radius_sq = radius * radius;
+        let objects = std::mem::take(&mut self.board.canvas_objects);
+        let mut erased_anything = false;
+
+        for obj in objects {
+            match obj {
+                CanvasObject::Stroke(s) => {
+                    // Mark points to keep (outside brush radius)
+                    let keep: Vec<bool> = s.points.iter().map(|p| {
+                        let dx = p[0] - world_pos[0];
+                        let dy = p[1] - world_pos[1];
+                        dx * dx + dy * dy >= radius_sq
+                    }).collect();
+
+                    if keep.iter().all(|&k| k) {
+                        // No points touched, keep whole stroke
+                        self.board.canvas_objects.push(CanvasObject::Stroke(s));
+                    } else {
+                        erased_anything = true;
+                        // Split into contiguous kept segments
+                        let mut segment: Vec<[f32; 2]> = Vec::new();
+                        for (i, pt) in s.points.iter().enumerate() {
+                            if keep[i] {
+                                segment.push(*pt);
+                            } else {
+                                if segment.len() >= 2 {
+                                    self.board.canvas_objects.push(
+                                        CanvasObject::Stroke(DrawingStroke {
+                                            id: s.id,
+                                            points: segment,
+                                            color: s.color,
+                                            width: s.width,
+                                        }),
+                                    );
+                                }
+                                segment = Vec::new();
+                            }
+                        }
+                        // Last segment
+                        if segment.len() >= 2 {
+                            self.board.canvas_objects.push(
+                                CanvasObject::Stroke(DrawingStroke {
+                                    id: s.id,
+                                    points: segment,
+                                    color: s.color,
+                                    width: s.width,
+                                }),
+                            );
+                        }
+                    }
+                }
+                other => {
+                    self.board.canvas_objects.push(other);
                 }
             }
         }
-        if to_remove.is_empty() { return; }
-        for i in to_remove.into_iter().rev() {
-            self.board.canvas_objects.remove(i);
+
+        if erased_anything {
+            self.dirty = true;
         }
-        self.dirty = true;
     }
 }
 
@@ -675,15 +717,17 @@ impl eframe::App for RecallApp {
                                 }
                             }
                             EraserMode::Brush => {
-                                // Brush eraser: drag removes strokes under cursor
+                                // Brush eraser: drag removes stroke points under cursor
                                 let pointer_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-                                let canvas_hover = canvas_rect.contains(ctx.input(|i| i.pointer.hover_pos().unwrap_or(Pos2::new(-1.0, -1.0))));
-                                if pointer_down && canvas_hover {
-                                    if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
-                                        let wp = screen_to_world(pos);
-                                        let radius = 15.0 / zoom.max(0.1);
-                                        self.brush_erase_at(wp, radius);
-                                        self.status = "Brush erasing...".to_string();
+                                if pointer_down {
+                                    if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                                        let in_canvas = canvas_rect.contains(pos);
+                                        if in_canvas {
+                                            let wp = screen_to_world(pos);
+                                            let radius = 20.0 / zoom.max(0.1);
+                                            self.brush_erase_at(wp, radius);
+                                            self.status = "Brush erasing...".to_string();
+                                        }
                                     }
                                     ctx.request_repaint();
                                 }
