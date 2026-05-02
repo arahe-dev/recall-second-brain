@@ -4,10 +4,16 @@ use egui::{Color32, CornerRadius, Frame, Margin, Panel, Pos2, Stroke, Vec2};
 use crate::model::{Board, CanvasObject, DrawingStroke, TextNote};
 use crate::storage;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 enum ToolMode {
+    Cursor,
     Pen,
     Text,
+    Eraser,
+    Line,
+    Arrow,
+    Rect,
+    Oval,
 }
 
 pub struct RecallApp {
@@ -25,6 +31,7 @@ pub struct RecallApp {
     show_load_input: bool,
     load_path_input: String,
     board_list: Vec<String>,
+    selected_object_id: Option<u64>,
 }
 
 impl Default for RecallApp {
@@ -32,7 +39,7 @@ impl Default for RecallApp {
         Self {
             board: Board::new("Untitled Board"),
             board_path: None,
-            mode: ToolMode::Pen,
+            mode: ToolMode::Cursor,
             current_stroke: None,
             next_note_id: 1,
             status: "Ready".to_string(),
@@ -44,6 +51,7 @@ impl Default for RecallApp {
             show_load_input: false,
             load_path_input: String::new(),
             board_list: Vec::new(),
+            selected_object_id: None,
         }
     }
 }
@@ -114,6 +122,7 @@ impl RecallApp {
                     .max()
                     .unwrap_or(0)
                     + 1;
+                self.selected_object_id = None;
                 self.dirty = false;
                 self.status = format!("Loaded: {path}");
             }
@@ -165,6 +174,7 @@ impl RecallApp {
         self.next_note_id = 1;
         self.current_stroke = None;
         self.editing_note = None;
+        self.selected_object_id = None;
         self.dirty = false;
         self.status = "New board".to_string();
         self.scan_board_files();
@@ -179,8 +189,13 @@ impl RecallApp {
 
     fn clear_all(&mut self) {
         self.board.canvas_objects.clear();
+        self.selected_object_id = None;
         self.dirty = true;
         self.status = "Canvas cleared".to_string();
+    }
+
+    fn count_objects(&self) -> usize {
+        self.board.canvas_objects.len()
     }
 
     fn count_strokes(&self) -> usize {
@@ -236,6 +251,41 @@ impl RecallApp {
     fn find_draggable_note(&self, canvas_rect: egui::Rect, pos: Pos2, threshold: f32) -> Option<u64> {
         self.find_note_at(canvas_rect, pos, threshold)
     }
+
+    fn find_object_at(&self, canvas_rect: egui::Rect, pos: Pos2, threshold: f32) -> Option<u64> {
+        for obj in &self.board.canvas_objects {
+            match obj {
+                CanvasObject::TextNote(n) => {
+                    let np = Pos2::new(canvas_rect.min.x + n.x, canvas_rect.min.y + n.y);
+                    if pos.distance(np) < threshold {
+                        return Some(n.id);
+                    }
+                }
+                CanvasObject::Stroke(s) => {
+                    for p in &s.points {
+                        let pp = Pos2::new(canvas_rect.min.x + p[0], canvas_rect.min.y + p[1]);
+                        if pos.distance(pp) < threshold {
+                            return Some(s.id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn delete_object(&mut self, id: u64) {
+        self.board.canvas_objects.retain(|obj| match obj {
+            CanvasObject::TextNote(n) => n.id != id,
+            CanvasObject::Stroke(s) => s.id != id,
+            _ => true,
+        });
+        if self.selected_object_id == Some(id) {
+            self.selected_object_id = None;
+        }
+        self.dirty = true;
+    }
 }
 
 impl eframe::App for RecallApp {
@@ -271,20 +321,36 @@ impl eframe::App for RecallApp {
             })
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let pen_sel = self.mode == ToolMode::Pen;
-                    let text_sel = self.mode == ToolMode::Text;
-                    if ui
-                        .selectable_label(pen_sel, "\u{270F}\u{FE0F} Pen")
-                        .clicked()
-                    {
-                        self.mode = ToolMode::Pen;
-                        self.editing_note = None;
-                        self.status = "Pen mode".to_string();
+                    let tools = [
+                        (ToolMode::Cursor, "\u{25A1} Cursor"),
+                        (ToolMode::Pen, "\u{270F} Pen"),
+                        (ToolMode::Text, "T Text"),
+                        (ToolMode::Eraser, "\u{232B} Eraser"),
+                    ];
+                    for (tool, label) in &tools {
+                        let sel = self.mode == *tool;
+                        if ui.selectable_label(sel, *label).clicked() {
+                            self.mode = tool.clone();
+                            self.editing_note = None;
+                            self.current_stroke = None;
+                            self.status = format!("{:?} mode", tool);
+                        }
                     }
-                    if ui.selectable_label(text_sel, "\u{1F524} Text").clicked() {
-                        self.mode = ToolMode::Text;
-                        self.current_stroke = None;
-                        self.status = "Text mode".to_string();
+
+                    ui.separator();
+
+                    let shapes = [
+                        (ToolMode::Line, "\u{2571} Line"),
+                        (ToolMode::Arrow, "\u{2192} Arrow"),
+                        (ToolMode::Rect, "\u{25A1} Rect"),
+                        (ToolMode::Oval, "\u{25CB} Oval"),
+                    ];
+                    for (tool, label) in &shapes {
+                        let sel = self.mode == *tool;
+                        if ui.selectable_label(sel, *label).clicked() {
+                            self.mode = tool.clone();
+                            self.status = format!("{:?} tool (not yet drawing)", tool);
+                        }
                     }
 
                     ui.separator();
@@ -419,15 +485,27 @@ impl eframe::App for RecallApp {
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     let mode_label = match self.mode {
-                        ToolMode::Pen => "\u{270F}\u{FE0F} Pen",
-                        ToolMode::Text => "\u{1F524} Text",
+                        ToolMode::Cursor => "\u{25A1} Cursor",
+                        ToolMode::Pen => "\u{270F} Pen",
+                        ToolMode::Text => "T Text",
+                        ToolMode::Eraser => "\u{232B} Eraser",
+                        ToolMode::Line => "\u{2571} Line",
+                        ToolMode::Arrow => "\u{2192} Arrow",
+                        ToolMode::Rect => "\u{25A1} Rect",
+                        ToolMode::Oval => "\u{25CB} Oval",
                     };
                     ui.label(mode_label);
                     ui.separator();
+                    let sel_str = match self.selected_object_id {
+                        Some(id) => format!(" Sel:{}", id),
+                        None => String::new(),
+                    };
                     ui.label(format!(
-                        "Strokes: {}  Notes: {}",
+                        "S:{} N:{} O:{}{}",
                         self.count_strokes(),
-                        self.count_notes()
+                        self.count_notes(),
+                        self.count_objects(),
+                        sel_str,
                     ));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.dirty {
@@ -460,6 +538,41 @@ impl eframe::App for RecallApp {
 
                 // ── Handle input ──
                 match self.mode {
+                    ToolMode::Cursor => {
+                        if response.clicked() {
+                            if let Some(pos) = response.interact_pointer_pos() {
+                                let id = self.find_object_at(canvas_rect, pos, 30.0);
+                                self.selected_object_id = id;
+                                self.status = match id {
+                                    Some(_) => "Selected".to_string(),
+                                    None => "Deselected".to_string(),
+                                };
+                            }
+                        }
+                        if response.dragged() && self.selected_object_id.is_some() {
+                            if let Some(pos) = response.interact_pointer_pos() {
+                                if let Some(note) = self.find_note_mut(self.selected_object_id.unwrap())
+                                {
+                                    note.x = pos.x - canvas_rect.min.x - 50.0;
+                                    note.y = pos.y - canvas_rect.min.y - 10.0;
+                                    self.dirty = true;
+                                }
+                            }
+                        }
+                    }
+                    ToolMode::Eraser => {
+                        if response.clicked() {
+                            if let Some(pos) = response.interact_pointer_pos() {
+                                if let Some(id) = self.find_object_at(canvas_rect, pos, 30.0) {
+                                    self.delete_object(id);
+                                    self.status = "Deleted".to_string();
+                                }
+                            }
+                        }
+                    }
+                    ToolMode::Line | ToolMode::Arrow | ToolMode::Rect | ToolMode::Oval => {
+                        // Placeholder — shape drawing not implemented yet
+                    }
                     ToolMode::Pen => {
                         if response.dragged() {
                             if let Some(pos) = response.interact_pointer_pos() {
