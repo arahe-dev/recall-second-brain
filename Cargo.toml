@@ -3,6 +3,18 @@ name = "recall-sketch-notes"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "recall_sketch_notes"
+path = "src/lib.rs"
+
+[[bin]]
+name = "recall-sketch-notes"
+path = "src/main.rs"
+
+[[bin]]
+name = "recall_ops"
+path = "src/bin/recall_ops.rs"
+
 [dependencies]
 eframe = "0.34.1"
 serde = { version = "1.0.228", features = ["derive"] }

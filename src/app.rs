@@ -740,6 +740,13 @@ impl eframe::App for RecallApp {
                             self.show_load_input = false;
                         }
                     }
+                    if ui.button("Fl").on_hover_text("Load flowchart board").clicked() {
+                        self.show_load_input = !self.show_load_input;
+                        if self.show_load_input {
+                            self.load_path_input = "./data/current-board.json".to_string();
+                            self.status = "Load flowchart board (Enter to confirm)".to_string();
+                        }
+                    }
                     if ui.button("Save As...").clicked() {
                         let ts = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)

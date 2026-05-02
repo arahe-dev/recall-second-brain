@@ -1,7 +1,3 @@
-mod app;
-mod model;
-mod storage;
-
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
@@ -23,6 +19,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Recall Sketch Notes",
         options,
-        Box::new(|_cc| Ok(Box::new(app::RecallApp::new(board_path)))),
+        Box::new(|_cc| Ok(Box::new(recall_sketch_notes::app::RecallApp::new(board_path)))),
     )
 }
