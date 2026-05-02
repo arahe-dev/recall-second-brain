@@ -1,37 +1,31 @@
 # Health Check — recall-sketch-notes
 
-## Entry 1 — Preflight (Session 2)
+## Final Entry (Session 2)
 - **Timestamp**: 2026-05-02
-- **Phase**: 0 (Preflight)
-- **Builder**: PiQwen/Qwen (planned), DeepSeek (supervisor)
+- **Phase**: 1 complete, Phase 2 started
 
 ## Build status
 - cargo check: PASS
-- cargo build: PASS (after killing stale PID 31692)
+- cargo build: PASS
 - tests: N/A
 
-## Server status
-- Qwen server: starting (background job, 20.6 GB model loading)
-- Endpoint: http://127.0.0.1:8080
-- Thinking: disabled (agent mode)
-- Overheating risk: moderate (15W TDP, model uses CPU-MoE + GPU offload)
+## PiQwen success/failure
+- **Slice 1**: 2 attempts — first wrote model.rs (needed tiny fix), second wrote app.rs (clean). PASS.
+- **Slice 2**: 2 attempts — first timed out, second wrote 19 compile errors. FAIL. DeepSeek took over.
+- Pattern: PiQwen struggle with complex cross-file refactors (app.rs edits with many call sites). Better at self-contained changes to single files.
 
 ## Friction
-- `pi tps` syntax changed (no -PromptSize/-MaxTokens flags)
-- Server must run as background job to survive CLI timeout
-- 20.6 GB model takes significant time to load
-- Previous `pi -p` usage pattern unknown; may need --provider --model flags
-
-## Current milestone
-- phase: 0 (Preflight)
-- completed: All inspections done, tools verified, server starting
-- next: Phase 1 / Slice 1 (Core model refactor) — first PiQwen prompt
+1. **PiQwen timeout**: 5-min timeout too short for complex prompts. Model generates slowly.
+2. **egui 0.34 API changes**: rect_stroke needs StrokeKind 4th arg, Shape::Ellipse is tuple variant, no with_alpha, no scroll_delta on Response. All require reading source.
+3. **PiQwen + Rust 2024 edition**: nested closure type inference issues in some generated code.
+4. **Server stability**: llama-server died between tool calls (background job vs foreground).
+5. **Build blocked by running app**: cargo build fails if app binary is executing.
 
 ## Risk
-- data loss risk: low (backup exists at recall-sketch-notes-mvp-20260502-153925.zip)
-- server crash risk: moderate (model uses ~6.6 GB VRAM on 8 GB GPU)
-- Qwen hallucination risk: low for bounded code changes with cargo check gate
-- DeepSeek overreach risk: need to resist direct code edits, only supervise
+- All Phase 1 features build and compile
+- JSON serialization validated at compile time
+- No crashes expected (minimal unsafe code)
+- Backup exists
 
 ## Decision
-- continue — wait for server, then start Phase 1
+- stop — session complete
