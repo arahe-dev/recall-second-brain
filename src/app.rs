@@ -416,17 +416,36 @@ impl RecallApp {
         self.dirty = true;
     }
 
+    fn sample_segment(ax: f32, ay: f32, bx: f32, by: f32, n: u32) -> Vec<[f32; 2]> {
+        let mut pts = Vec::with_capacity(n as usize + 1);
+        for i in 0..=n {
+            let t = i as f32 / n as f32;
+            pts.push([ax + (bx - ax) * t, ay + (by - ay) * t]);
+        }
+        pts
+    }
+
     fn shape_to_outline_points(&self, sh: &Shape) -> Vec<[f32; 2]> {
         match sh.shape_type {
             ShapeType::Line | ShapeType::Arrow => {
-                vec![[sh.x1, sh.y1], [sh.x2, sh.y2]]
+                let seg_len = ((sh.x2 - sh.x1).powi(2) + (sh.y2 - sh.y1).powi(2)).sqrt();
+                let n = (seg_len / 5.0).ceil().max(10.0).min(50.0) as u32;
+                Self::sample_segment(sh.x1, sh.y1, sh.x2, sh.y2, n)
             }
             ShapeType::Rect => {
                 let xmin = sh.x1.min(sh.x2);
                 let xmax = sh.x1.max(sh.x2);
                 let ymin = sh.y1.min(sh.y2);
                 let ymax = sh.y1.max(sh.y2);
-                vec![[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]
+                let w = xmax - xmin;
+                let h = ymax - ymin;
+                let n_side = ((w.max(h) / 5.0).ceil().max(5.0).min(25.0)) as u32;
+                let mut pts = Vec::new();
+                pts.extend(Self::sample_segment(xmin, ymin, xmax, ymin, n_side));
+                pts.extend(Self::sample_segment(xmax, ymin, xmax, ymax, n_side));
+                pts.extend(Self::sample_segment(xmax, ymax, xmin, ymax, n_side));
+                pts.extend(Self::sample_segment(xmin, ymax, xmin, ymin, n_side));
+                pts
             }
             ShapeType::Oval => {
                 let xmin = sh.x1.min(sh.x2);
@@ -437,7 +456,7 @@ impl RecallApp {
                 let cy = (ymin + ymax) / 2.0;
                 let rx = (xmax - xmin) / 2.0;
                 let ry = (ymax - ymin) / 2.0;
-                let n = 20;
+                let n = 30;
                 let mut pts = Vec::with_capacity(n + 1);
                 for i in 0..=n {
                     let ang = std::f32::consts::TAU * i as f32 / n as f32;
