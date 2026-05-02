@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui::{CornerRadius, Color32, Frame, Margin, Panel, Pos2, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Frame, Margin, Panel, Pos2, Stroke, Vec2};
 
 use crate::model::{Board, DrawingStroke, TextNote};
 use crate::storage;
@@ -56,14 +56,8 @@ impl RecallApp {
                 Ok(board) => {
                     app.board = board;
                     app.board_path = Some(path.clone());
-                    app.next_note_id = app
-                        .board
-                        .text_notes
-                        .iter()
-                        .map(|n| n.id)
-                        .max()
-                        .unwrap_or(0)
-                        + 1;
+                    app.next_note_id =
+                        app.board.text_notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
                     app.status = format!("Loaded: {path}");
                 }
                 Err(e) => {
@@ -204,7 +198,10 @@ impl eframe::App for RecallApp {
                 ui.horizontal(|ui| {
                     let pen_sel = self.mode == ToolMode::Pen;
                     let text_sel = self.mode == ToolMode::Text;
-                    if ui.selectable_label(pen_sel, "\u{270F}\u{FE0F} Pen").clicked() {
+                    if ui
+                        .selectable_label(pen_sel, "\u{270F}\u{FE0F} Pen")
+                        .clicked()
+                    {
                         self.mode = ToolMode::Pen;
                         self.editing_note = None;
                         self.status = "Pen mode".to_string();
@@ -245,8 +242,8 @@ impl eframe::App for RecallApp {
                                 .desired_width(240.0)
                                 .hint_text("path/to/board.json"),
                         );
-                        let load_clicked = resp.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let load_clicked =
+                            resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if load_clicked {
                             let path = self.load_path_input.clone();
                             self.load(&path);
@@ -322,14 +319,9 @@ impl eframe::App for RecallApp {
                                     .file_name()
                                     .and_then(|n| n.to_str())
                                     .unwrap_or(path);
-                                let is_current = self
-                                    .board_path
-                                    .as_ref()
-                                    .map(|p| p == path)
-                                    .unwrap_or(false);
-                                if ui
-                                    .selectable_label(is_current, basename)
-                                    .clicked()
+                                let is_current =
+                                    self.board_path.as_ref().map(|p| p == path).unwrap_or(false);
+                                if ui.selectable_label(is_current, basename).clicked()
                                     && !is_current
                                 {
                                     clicked = Some(path.clone());
@@ -364,7 +356,9 @@ impl eframe::App for RecallApp {
                     ));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.dirty {
-                            ui.label(egui::RichText::new("\u{25CF} unsaved").color(Color32::YELLOW));
+                            ui.label(
+                                egui::RichText::new("\u{25CF} unsaved").color(Color32::YELLOW),
+                            );
                         }
                         ui.label(&self.status);
                     });
@@ -378,17 +372,16 @@ impl eframe::App for RecallApp {
                 ..Default::default()
             })
             .show_inside(ui, |ui| {
-                let (response, painter) = ui.allocate_painter(
-                    ui.available_size(),
-                    egui::Sense::click_and_drag(),
-                );
+                let (response, painter) =
+                    ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
 
                 let canvas_rect = response.rect;
                 let to_canvas = |pos: Pos2| -> [f32; 2] {
                     [pos.x - canvas_rect.min.x, pos.y - canvas_rect.min.y]
                 };
-                let from_canvas =
-                    |p: &[f32; 2]| -> Pos2 { Pos2::new(canvas_rect.min.x + p[0], canvas_rect.min.y + p[1]) };
+                let from_canvas = |p: &[f32; 2]| -> Pos2 {
+                    Pos2::new(canvas_rect.min.x + p[0], canvas_rect.min.y + p[1])
+                };
 
                 // ── Handle input ──
                 match self.mode {
@@ -481,11 +474,8 @@ impl eframe::App for RecallApp {
                         if let Some(drag_id) = self.drag_note_id {
                             if response.dragged() {
                                 if let Some(pos) = response.interact_pointer_pos() {
-                                    if let Some(note) = self
-                                        .board
-                                        .text_notes
-                                        .iter_mut()
-                                        .find(|n| n.id == drag_id)
+                                    if let Some(note) =
+                                        self.board.text_notes.iter_mut().find(|n| n.id == drag_id)
                                     {
                                         note.x = pos.x - canvas_rect.min.x - self.drag_offset.x;
                                         note.y = pos.y - canvas_rect.min.y - self.drag_offset.y;
@@ -508,7 +498,11 @@ impl eframe::App for RecallApp {
                             pts,
                             Stroke::new(
                                 stroke.width,
-                                Color32::from_rgb(stroke.color[0], stroke.color[1], stroke.color[2]),
+                                Color32::from_rgb(
+                                    stroke.color[0],
+                                    stroke.color[1],
+                                    stroke.color[2],
+                                ),
                             ),
                         ));
                     }
