@@ -326,21 +326,25 @@ impl eframe::App for RecallApp {
         // ── Toolbar ──
         Panel::top("toolbar")
             .frame(Frame {
-                fill: Color32::from_gray(24),
-                inner_margin: Margin::symmetric(8, 4),
+                fill: Color32::from_gray(20),
+                inner_margin: Margin::symmetric(10, 5),
                 ..Default::default()
             })
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Recall").color(Color32::from_rgb(88, 166, 255)).size(13.0).strong());
+                    ui.separator();
+
                     let tools = [
-                        (ToolMode::Cursor, "\u{25A1} Cursor"),
-                        (ToolMode::Pen, "\u{270F} Pen"),
-                        (ToolMode::Text, "T Text"),
-                        (ToolMode::Eraser, "\u{232B} Eraser"),
+                        (ToolMode::Cursor, "\u{25A1}"),
+                        (ToolMode::Pen, "\u{270F}"),
+                        (ToolMode::Text, "T"),
+                        (ToolMode::Eraser, "\u{232B}"),
                     ];
-                    for (tool, label) in &tools {
+                    for (tool, icon) in &tools {
                         let sel = self.mode == *tool;
-                        if ui.selectable_label(sel, *label).clicked() {
+                        let btn = egui::Button::new(egui::RichText::new(*icon).size(14.0)).fill(if sel { Color32::from_gray(40) } else { Color32::TRANSPARENT }).min_size(Vec2::new(28.0, 24.0));
+                        if ui.add(btn).clicked() {
                             self.mode = tool.clone();
                             self.editing_note = None;
                             self.current_stroke = None;
@@ -351,16 +355,17 @@ impl eframe::App for RecallApp {
                     ui.separator();
 
                     let shapes = [
-                        (ToolMode::Line, "\u{2571} Line"),
-                        (ToolMode::Arrow, "\u{2192} Arrow"),
-                        (ToolMode::Rect, "\u{25A1} Rect"),
-                        (ToolMode::Oval, "\u{25CB} Oval"),
+                        (ToolMode::Line, "\u{2571}"),
+                        (ToolMode::Arrow, "\u{2192}"),
+                        (ToolMode::Rect, "\u{25A1}"),
+                        (ToolMode::Oval, "\u{25CB}"),
                     ];
-                    for (tool, label) in &shapes {
+                    for (tool, icon) in &shapes {
                         let sel = self.mode == *tool;
-                        if ui.selectable_label(sel, *label).clicked() {
+                        let btn = egui::Button::new(egui::RichText::new(*icon).size(14.0)).fill(if sel { Color32::from_gray(40) } else { Color32::TRANSPARENT }).min_size(Vec2::new(28.0, 24.0));
+                        if ui.add(btn).clicked() {
                             self.mode = tool.clone();
-                            self.status = format!("{:?} tool (not yet drawing)", tool);
+                            self.status = format!("{:?}", tool);
                         }
                     }
 
@@ -437,11 +442,11 @@ impl eframe::App for RecallApp {
                 ui.vertical(|ui| {
                     ui.label(
                         egui::RichText::new("Boards")
-                            .color(Color32::from_gray(140))
-                            .size(11.0),
+                            .color(Color32::from_gray(160))
+                            .size(10.0),
                     );
-                    ui.separator();
-                    if ui.button("+ New Board").clicked() {
+                    ui.add_space(2.0);
+                    if ui.button(egui::RichText::new("+ New").size(11.0)).clicked() {
                         self.new_board();
                     }
                     ui.separator();
@@ -508,15 +513,12 @@ impl eframe::App for RecallApp {
                     ui.label(mode_label);
                     ui.separator();
                     let sel_str = match self.selected_object_id {
-                        Some(id) => format!(" Sel:{}", id),
+                        Some(id) => format!(" | Sel:{}", id),
                         None => String::new(),
                     };
                     ui.label(format!(
-                        "S:{} N:{} O:{}{}",
-                        self.count_strokes(),
-                        self.count_notes(),
-                        self.count_objects(),
-                        sel_str,
+                        "{}S {}N {}{}O{}",
+                        mode_label, self.count_strokes(), self.count_notes(), self.count_objects(), sel_str,
                     ));
                     ui.separator();
                     ui.label(format!("Zoom: {:.0}%", self.zoom * 100.0));
