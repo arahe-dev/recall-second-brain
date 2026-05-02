@@ -32,6 +32,8 @@ pub struct RecallApp {
     load_path_input: String,
     board_list: Vec<String>,
     selected_object_id: Option<u64>,
+    zoom: f32,
+    pan: Vec2,
 }
 
 impl Default for RecallApp {
@@ -52,6 +54,8 @@ impl Default for RecallApp {
             load_path_input: String::new(),
             board_list: Vec::new(),
             selected_object_id: None,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
         }
     }
 }
@@ -123,6 +127,8 @@ impl RecallApp {
                     .unwrap_or(0)
                     + 1;
                 self.selected_object_id = None;
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
                 self.dirty = false;
                 self.status = format!("Loaded: {path}");
             }
@@ -175,6 +181,8 @@ impl RecallApp {
         self.current_stroke = None;
         self.editing_note = None;
         self.selected_object_id = None;
+        self.zoom = 1.0;
+        self.pan = Vec2::ZERO;
         self.dirty = false;
         self.status = "New board".to_string();
         self.scan_board_files();
@@ -507,6 +515,8 @@ impl eframe::App for RecallApp {
                         self.count_objects(),
                         sel_str,
                     ));
+                    ui.separator();
+                    ui.label(format!("Zoom: {:.0}%", self.zoom * 100.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.dirty {
                             ui.label(
@@ -529,12 +539,34 @@ impl eframe::App for RecallApp {
                     ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
 
                 let canvas_rect = response.rect;
-                let to_canvas = |pos: Pos2| -> [f32; 2] {
-                    [pos.x - canvas_rect.min.x, pos.y - canvas_rect.min.y]
+                let zoom = self.zoom;
+                let pan = self.pan;
+
+                let screen_to_world = |screen: Pos2| -> [f32; 2] {
+                    let rel = screen - canvas_rect.min - pan;
+                    [rel.x / zoom, rel.y / zoom]
                 };
-                let from_canvas = |p: &[f32; 2]| -> Pos2 {
-                    Pos2::new(canvas_rect.min.x + p[0], canvas_rect.min.y + p[1])
+                let world_to_screen = |world: &[f32; 2]| -> Pos2 {
+                    Pos2::new(
+                        canvas_rect.min.x + pan.x + world[0] * zoom,
+                        canvas_rect.min.y + pan.y + world[1] * zoom,
+                    )
                 };
+
+                // ── Zoom with mouse wheel ──
+                let scroll = ctx.input(|i| i.smooth_scroll_delta);
+                if scroll.y != 0.0 || scroll.x != 0.0 {
+                    let zoom_factor = 1.0 + scroll.y * 0.001;
+                    self.zoom = (self.zoom * zoom_factor).clamp(0.1, 10.0);
+                }
+
+                // ── Pan with middle mouse ──
+                if response.dragged_by(egui::PointerButton::Middle) {
+                    let _ = response.interact_pointer_pos();
+                    let delta = response.drag_delta();
+                    self.pan.x += delta.x;
+                    self.pan.y += delta.y;
+                }
 
                 // ── Handle input ──
                 match self.mode {
@@ -576,7 +608,7 @@ impl eframe::App for RecallApp {
                     ToolMode::Pen => {
                         if response.dragged() {
                             if let Some(pos) = response.interact_pointer_pos() {
-                                let cp = to_canvas(pos);
+                                let cp = screen_to_world(pos);
                                 if self.current_stroke.is_none() {
                                     let mut stroke = DrawingStroke::new([180, 200, 255], 3.0);
                                     stroke.points.push(cp);
@@ -603,7 +635,7 @@ impl eframe::App for RecallApp {
                     ToolMode::Text => {
                         if response.clicked() {
                             if let Some(pos) = response.interact_pointer_pos() {
-                                let cp = to_canvas(pos);
+                                let cp = screen_to_world(pos);
                                 let clicked_id =
                                     self.find_note_at(canvas_rect, pos, 30.0);
 
@@ -673,7 +705,7 @@ impl eframe::App for RecallApp {
                     if let CanvasObject::Stroke(stroke) = obj {
                         if stroke.points.len() >= 2 {
                             let pts: Vec<Pos2> =
-                                stroke.points.iter().map(from_canvas).collect();
+                                stroke.points.iter().map(world_to_screen).collect();
                             painter.add(egui::Shape::line(
                                 pts,
                                 Stroke::new(
@@ -692,7 +724,7 @@ impl eframe::App for RecallApp {
                 // ── Draw current in-progress stroke ──
                 if let Some(points) = &self.current_stroke {
                     if points.len() >= 2 {
-                        let pts: Vec<Pos2> = points.iter().map(from_canvas).collect();
+                        let pts: Vec<Pos2> = points.iter().map(world_to_screen).collect();
                         painter.add(egui::Shape::line(
                             pts,
                             Stroke::new(3.0, Color32::from_rgb(180, 200, 255)),
@@ -707,7 +739,7 @@ impl eframe::App for RecallApp {
 
                 for obj in &self.board.canvas_objects {
                     if let CanvasObject::TextNote(note) = obj {
-                        let pos = from_canvas(&[note.x, note.y]);
+                        let pos = world_to_screen(&[note.x, note.y]);
                         let is_editing = editing_note == Some(note.id);
 
                         let note_rect =
