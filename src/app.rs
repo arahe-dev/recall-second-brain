@@ -84,6 +84,7 @@ pub struct RecallApp {
     eraser_size_br: f32,
     eraser_last_pos: Option<[f32; 2]>,
     eraser_is_dragging: bool,
+    board_history: Vec<Board>,
 }
 
 impl Default for RecallApp {
@@ -112,6 +113,7 @@ impl Default for RecallApp {
             eraser_size_br: 20.0,
             eraser_last_pos: None,
             eraser_is_dragging: false,
+            board_history: Vec::new(),
         }
     }
 }
@@ -185,6 +187,7 @@ impl RecallApp {
                 self.selected_object_id = None;
                 self.zoom = 1.0;
                 self.pan = Vec2::ZERO;
+                self.board_history.clear();
                 self.dirty = false;
                 self.status = format!("Loaded: {path}");
             }
@@ -195,19 +198,18 @@ impl RecallApp {
         self.scan_board_files();
     }
 
-    fn undo_last_stroke(&mut self) {
-        // Remove the last Stroke variant from canvas_objects
-        let mut remove_idx = None;
-        for (i, obj) in self.board.canvas_objects.iter().enumerate().rev() {
-            if matches!(obj, CanvasObject::Stroke(_)) {
-                remove_idx = Some(i);
-                break;
-            }
+    fn push_history(&mut self) {
+        self.board_history.push(self.board.clone());
+        if self.board_history.len() > 50 {
+            self.board_history.remove(0);
         }
-        if let Some(idx) = remove_idx {
-            self.board.canvas_objects.remove(idx);
+    }
+
+    fn undo_last_stroke(&mut self) {
+        if let Some(prev) = self.board_history.pop() {
+            self.board = prev;
             self.dirty = true;
-            self.status = "Undo last stroke".to_string();
+            self.status = "Undo".to_string();
         }
     }
 
@@ -252,6 +254,7 @@ impl RecallApp {
     }
 
     fn clear_all(&mut self) {
+        self.push_history();
         self.board.canvas_objects.clear();
         self.selected_object_id = None;
         self.dirty = true;
@@ -512,7 +515,7 @@ impl RecallApp {
                     }
                 }
                 CanvasObject::Shape(sh) => {
-                    // Partial erasure: convert shape outline to polyline, erase points, keep fragments
+                    let is_arrow = sh.shape_type == ShapeType::Arrow;
                     let outline = self.shape_to_outline_points(&sh);
                     let keep: Vec<bool> = outline.iter().map(|p| {
                         let dx = p[0] - wx;
@@ -521,34 +524,42 @@ impl RecallApp {
                     }).collect();
 
                     if keep.iter().all(|&k| k) {
-                        // No points touched, keep shape
                         self.board.canvas_objects.push(CanvasObject::Shape(sh));
                     } else {
                         erased_anything = true;
                         let mut segment: Vec<[f32; 2]> = Vec::new();
-                        for (i, pt) in outline.iter().enumerate() {
-                            if keep[i] {
-                                segment.push(*pt);
-                            } else {
-                                if segment.len() >= 2 {
+                        let mut flush_segment = |seg: &mut Vec<[f32; 2]>, arrow: bool| {
+                            if seg.len() >= 2 {
+                                if arrow && is_arrow {
+                                    // Preserve arrowhead: create as Arrow shape
+                                    self.board.canvas_objects.push(
+                                        CanvasObject::Shape(Shape::new(sh.id, ShapeType::Arrow,
+                                            seg[0][0], seg[0][1], seg[seg.len()-1][0], seg[seg.len()-1][1])),
+                                    );
+                                } else {
                                     self.board.canvas_objects.push(
                                         CanvasObject::Stroke(DrawingStroke {
-                                            id: sh.id, points: segment,
+                                            id: sh.id, points: seg.clone(),
                                             color: sh.color, width: sh.stroke_width.max(1.0),
                                         }),
                                     );
                                 }
-                                segment = Vec::new();
+                            }
+                            seg.clear();
+                        };
+                        for (i, pt) in outline.iter().enumerate() {
+                            if keep[i] {
+                                segment.push(*pt);
+                            } else {
+                                flush_segment(&mut segment, false);
                             }
                         }
-                        if segment.len() >= 2 {
-                            self.board.canvas_objects.push(
-                                CanvasObject::Stroke(DrawingStroke {
-                                    id: sh.id, points: segment,
-                                    color: sh.color, width: sh.stroke_width.max(1.0),
-                                }),
-                            );
-                        }
+                        // Last segment - check if it ends at the arrowhead endpoint
+                        let has_arrow = is_arrow && !segment.is_empty() && {
+                            let last_pt = segment.last().unwrap();
+                            (last_pt[0] - sh.x2).abs() < 0.1 && (last_pt[1] - sh.y2).abs() < 0.1
+                        };
+                        flush_segment(&mut segment, has_arrow);
                     }
                 }
                 CanvasObject::TextNote(_) => {
@@ -948,6 +959,7 @@ impl eframe::App for RecallApp {
                                 if pointer_down && hover.is_some() && canvas_rect.contains(hover.unwrap()) {
                                     if !self.eraser_is_dragging {
                                         self.eraser_is_dragging = true;
+                                        self.push_history();
                                         if let Some(pos) = hover {
                                             let wp = screen_to_world(pos);
                                             self.eraser_last_pos = Some(wp);
@@ -973,6 +985,7 @@ impl eframe::App for RecallApp {
                                 if pointer_down && hover.is_some() && canvas_rect.contains(hover.unwrap()) {
                                     if !self.eraser_is_dragging {
                                         self.eraser_is_dragging = true;
+                                        self.push_history();
                                         if let Some(pos) = hover {
                                             let wp = screen_to_world(pos);
                                             self.eraser_last_pos = Some(wp);
@@ -1016,6 +1029,7 @@ impl eframe::App for RecallApp {
                         }
                         if response.drag_stopped() {
                             if let Some((start, end, st2)) = self.current_shape.take() {
+                                self.push_history();
                                 let id = self.next_note_id;
                                 self.next_note_id += 1;
                                 self.board.canvas_objects.push(
@@ -1041,6 +1055,7 @@ impl eframe::App for RecallApp {
                         if response.drag_stopped() {
                             if let Some(points) = self.current_stroke.take() {
                                 if points.len() >= 2 {
+                                    self.push_history();
                                     let mut stroke =
                                         DrawingStroke::new([180, 200, 255], 3.0);
                                     stroke.points = points;
@@ -1068,6 +1083,7 @@ impl eframe::App for RecallApp {
                                     self.edit_buffer = text;
                                     self.status = "Editing note".to_string();
                                 } else {
+                                    self.push_history();
                                     let id = self.next_note_id;
                                     self.next_note_id += 1;
                                     self.board.canvas_objects.push(
