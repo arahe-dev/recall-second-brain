@@ -83,6 +83,12 @@ pub enum ShapeType {
     Oval,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum EraserMode {
+    Element,
+    Brush,
+}
+
 // ── Backward-compatible deserialization ──
 // Old files used { strokes: [...], text_notes: [...] }.
 // New files use { canvas_objects: [{ type: "stroke", ... }, ...] }.
